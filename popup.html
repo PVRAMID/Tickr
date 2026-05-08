@@ -148,6 +148,68 @@
       color: #444;
     }
 
+    .logPanel {
+      margin: 0 0 14px;
+      padding: 10px;
+      border-radius: 12px;
+      background: white;
+      border: 1px solid #e2e8f0;
+      text-align: left;
+    }
+
+    .logHeader {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #64748b;
+    }
+
+    .logList {
+      display: grid;
+      gap: 8px;
+      max-height: 180px;
+      overflow-y: auto;
+    }
+
+    .logEmpty {
+      font-size: 12px;
+      color: #64748b;
+    }
+
+    .logItem {
+      padding: 8px 9px;
+      border-radius: 10px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+    }
+
+    .logMeta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 4px;
+      font-size: 11px;
+      color: #64748b;
+    }
+
+    .logSummary {
+      font-size: 12px;
+      font-weight: 700;
+      color: #0f172a;
+    }
+
+    .logDetail {
+      margin-top: 3px;
+      font-size: 11px;
+      color: #475569;
+      word-break: break-word;
+    }
+
     .info {
       position: relative;
       cursor: pointer;
@@ -209,6 +271,16 @@
     <button id="startBtn">Start</button>
     <button id="pauseBtn">Pause</button>
     <button id="stopBtn">Stop</button>
+  </div>
+
+  <div class="logPanel">
+    <div class="logHeader">
+      <span>Session Log</span>
+      <span id="adapterName">Ticketmaster Generic</span>
+    </div>
+    <div id="logList" class="logList">
+      <div class="logEmpty">No tracker events yet.</div>
+    </div>
   </div>
 
   <div class="subnote">

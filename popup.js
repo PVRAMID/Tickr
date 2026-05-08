@@ -1,6 +1,7 @@
 const TRACKER_DEFAULTS = {
   mode: "stopped",
   statusText: "Tracker is idle.",
+  adapterName: "Ticketmaster Generic",
   lastCheckAt: null,
   nextCheckAt: null,
   sessionStartedAt: null,
@@ -11,6 +12,7 @@ const TRACKER_DEFAULTS = {
 
 let trackerState = { ...TRACKER_DEFAULTS };
 let runtimeTimer = null;
+let trackerLog = [];
 
 function formatTimestamp(ts) {
   if (!ts) return "Waiting";
@@ -33,6 +35,16 @@ function formatDuration(ms) {
   }
 
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatLogTime(ts) {
+  if (!ts) return "--:--:--";
+
+  return new Intl.DateTimeFormat([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  }).format(new Date(ts));
 }
 
 function getLiveRuntimeMs() {
@@ -79,9 +91,30 @@ function updateUI() {
   document.getElementById("lastCheck").innerText = formatTimestamp(trackerState.lastCheckAt);
   document.getElementById("productiveCount").innerText = String(trackerState.productiveSearches || 0);
   document.getElementById("nonProductiveCount").innerText = String(trackerState.nonProductiveSearches || 0);
+  document.getElementById("adapterName").innerText = trackerState.adapterName || "Ticketmaster Generic";
 
   setButtonState();
   syncRuntimeTicker();
+}
+
+function renderLog() {
+  const logList = document.getElementById("logList");
+
+  if (!trackerLog.length) {
+    logList.innerHTML = '<div class="logEmpty">No tracker events yet.</div>';
+    return;
+  }
+
+  logList.innerHTML = trackerLog.slice(0, 12).map((entry) => `
+    <div class="logItem">
+      <div class="logMeta">
+        <span>${formatLogTime(entry.at)}</span>
+        <span>${entry.kind || "info"}</span>
+      </div>
+      <div class="logSummary">${entry.summary || "Tracker event"}</div>
+      ${entry.detail ? `<div class="logDetail">${entry.detail}</div>` : ""}
+    </div>
+  `).join("");
 }
 
 function mergeTrackerState(data) {
@@ -94,8 +127,14 @@ function mergeTrackerState(data) {
   updateUI();
 }
 
+function mergeTrackerLog(data) {
+  trackerLog = Array.isArray(data.trackerLog) ? data.trackerLog : [];
+  renderLog();
+}
+
 function saveTrackerMode(mode) {
   const nextState = { ...trackerState };
+  const payload = {};
 
   if (mode === "start") {
     if (nextState.mode === "paused") {
@@ -116,6 +155,8 @@ function saveTrackerMode(mode) {
         lastCheckAt: null,
         nextCheckAt: null
       });
+
+      payload.trackerLog = [];
     }
   } else if (mode === "pause") {
     if (nextState.mode === "running" && nextState.sessionStartedAt) {
@@ -135,13 +176,15 @@ function saveTrackerMode(mode) {
     });
   }
 
-  chrome.storage.local.set({ trackerState: nextState });
+  payload.trackerState = nextState;
+  chrome.storage.local.set(payload);
 }
 
-chrome.storage.local.get(["chatId", "token", "trackerState"], (data) => {
+chrome.storage.local.get(["chatId", "token", "trackerState", "trackerLog"], (data) => {
   if (data.chatId) document.getElementById("chatId").value = data.chatId;
   if (data.token) document.getElementById("token").value = data.token;
   mergeTrackerState(data);
+  mergeTrackerLog(data);
 });
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
@@ -149,6 +192,10 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 
   if (changes.trackerState) {
     mergeTrackerState({ trackerState: changes.trackerState.newValue });
+  }
+
+  if (changes.trackerLog) {
+    mergeTrackerLog({ trackerLog: changes.trackerLog.newValue });
   }
 
   if (changes.chatId) {

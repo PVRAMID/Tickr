@@ -11,12 +11,17 @@ let telegramConfig = {
   token: "",
   chatId: ""
 };
+let trackerLog = [];
+
+const TRACKER_LOG_LIMIT = 24;
 
 const TRACKER_DEFAULTS = {
   mode: "stopped",
   statusText: "Tracker is idle.",
   badge: "idle",
+  adapterName: "Ticketmaster Generic",
   lastResult: "Standing by",
+  panelPosition: null,
   lastCheckAt: null,
   nextCheckAt: null,
   sessionStartedAt: null,
@@ -29,6 +34,100 @@ const TRACKER_DEFAULTS = {
 };
 
 let trackerState = { ...TRACKER_DEFAULTS };
+let panelDragState = null;
+
+const COMMON_SELECTORS = {
+  offerCards: [
+    '[data-testid*="offer-card"]',
+    '[data-testid*="offer-item"]',
+    '[data-bdd*="offer-card"]',
+    '[class*="OfferCard"]',
+    '[class*="offer-card"]',
+    '[class*="offerListItem"]',
+    '[class*="offer-item"]'
+  ],
+  priceNodes: [
+    '[data-testid*="price"]',
+    '[data-bdd*="price"]',
+    '[aria-label*="price" i]',
+    '[class*="price"]'
+  ],
+  checkoutCtas: [
+    '[data-testid*="checkout"]',
+    '[data-bdd*="checkout"]',
+    '[data-testid*="buy"]',
+    '[data-bdd*="buy"]',
+    'button[aria-label*="checkout" i]',
+    'button[aria-label*="buy" i]'
+  ],
+  retryCtas: [
+    'button',
+    '[role="button"]'
+  ],
+  loadingSignals: [
+    '[aria-busy="true"]',
+    '[data-testid*="spinner"]',
+    '[class*="loading"]',
+    '[class*="spinner"]'
+  ],
+  errorSignals: [
+    '[data-testid*="error"]',
+    '[data-bdd*="error"]'
+  ],
+  reservedSignals: [
+    '[data-testid*="timer"]',
+    '[class*="timer"]',
+    '[class*="countdown"]'
+  ]
+};
+
+const HOST_ADAPTERS = [
+  {
+    match: /ticketmaster\.co\.uk$/i,
+    name: "Ticketmaster UK",
+    selectors: COMMON_SELECTORS,
+    textMarkers: {
+      searchPrompt: ["search for tickets", "find tickets", "search again"],
+      noAvailability: [
+        "no tickets available",
+        "not enough tickets",
+        "tickets will appear below when they are available"
+      ],
+      resaleAvailable: ["resale tickets", "face value resale"],
+      purchaseReady: ["buy now", "checkout", "continue", "go to checkout"],
+      error: [
+        "something went wrong",
+        "your browsing activity has been paused",
+        "unable to complete your request",
+        "try refreshing the page"
+      ]
+    }
+  },
+  {
+    match: /ticketmaster\.com$/i,
+    name: "Ticketmaster US",
+    selectors: COMMON_SELECTORS,
+    textMarkers: {
+      searchPrompt: ["search for tickets", "find tickets", "search again"],
+      noAvailability: ["no tickets available", "not enough tickets"],
+      resaleAvailable: ["resale tickets", "face value resale"],
+      purchaseReady: ["buy now", "checkout", "continue", "go to checkout"],
+      error: ["something went wrong", "your browsing activity has been paused", "unable to complete your request"]
+    }
+  },
+  {
+    match: /ticketmaster\.it$/i,
+    name: "Ticketmaster IT",
+    selectors: COMMON_SELECTORS,
+    textMarkers: {
+      searchPrompt: ["search for tickets", "find tickets", "search again"],
+      noAvailability: ["no tickets available", "not enough tickets"],
+      resaleAvailable: ["resale tickets", "face value resale"],
+      purchaseReady: ["buy now", "checkout", "continue", "go to checkout"],
+      error: ["something went wrong", "your browsing activity has been paused", "unable to complete your request"]
+    }
+  }
+];
 
 const NEGATIVE_AVAILABILITY_PHRASES = [
   "there arent enough tickets",
@@ -152,6 +251,66 @@ function formatDuration(ms) {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
+function getHostname() {
+  return window.location.hostname || "";
+}
+
+function resolveAdapter() {
+  const hostname = getHostname();
+  const matched = HOST_ADAPTERS.find((adapter) => adapter.match.test(hostname));
+
+  return matched || {
+    name: "Ticketmaster Generic",
+    selectors: COMMON_SELECTORS
+  };
+}
+
+function isElementVisible(element) {
+  if (!element) return false;
+
+  const rect = element.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+}
+
+function queryVisible(selectors) {
+  for (const selector of selectors) {
+    const element = document.querySelector(selector);
+
+    if (element && isElementVisible(element)) {
+      return element;
+    }
+  }
+
+  return null;
+}
+
+function queryAllVisible(selectors) {
+  return selectors.flatMap((selector) =>
+    [...document.querySelectorAll(selector)].filter(isElementVisible)
+  );
+}
+
+function appendTrackerLog(entry) {
+  const nextLog = [entry, ...trackerLog].slice(0, TRACKER_LOG_LIMIT);
+  trackerLog = nextLog;
+  chrome.storage.local.set({ trackerLog: nextLog });
+}
+
+function logEvent(kind, summary, detail = "") {
+  appendTrackerLog({
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    at: Date.now(),
+    kind,
+    summary,
+    detail
+  });
+}
+
+function clearTrackerLog() {
+  trackerLog = [];
+  chrome.storage.local.set({ trackerLog: [] });
+}
+
 function getLiveRuntimeMs() {
   const runtimeMs = trackerState.runtimeMs || 0;
 
@@ -181,6 +340,84 @@ function getTicketTarget() {
   const quantityLabel = quantityValue ? `${quantityValue} ticket${quantityValue === "1" ? "" : "s"}` : "Any available tickets";
 
   return `${cleanedTitle || "Current event page"} - ${quantityLabel}`;
+}
+
+function getRetryButtons() {
+  return [...document.querySelectorAll("button, [role='button'], a")].filter((element) => {
+    const label = (element.innerText || element.getAttribute("aria-label") || "").trim().toLowerCase();
+    return label.includes("find tickets") || label.includes("search again");
+  });
+}
+
+function hasVisibleTextMarker(markers) {
+  if (!markers?.length) return false;
+
+  const pageText = getPageText();
+  return markers.some((marker) => pageText.includes(marker));
+}
+
+function getAvailabilitySnapshot(adapter) {
+  const pageText = getPageText();
+  const selectors = adapter.selectors;
+  const textMarkers = adapter.textMarkers || {};
+  const visibleOfferCards = queryAllVisible(selectors.offerCards);
+  const visiblePriceNodes = queryAllVisible(selectors.priceNodes).filter((node) =>
+    /(?:\u00A3|\$|€)\s?\d/.test(node.innerText || "")
+  );
+  const visibleCheckoutCtas = queryAllVisible(selectors.checkoutCtas).filter((node) => {
+    const label = (node.innerText || node.getAttribute("aria-label") || "").trim().toLowerCase();
+    return PURCHASE_CTA_PHRASES.some((phrase) => label.includes(phrase)) || Boolean(node.closest("button, a"));
+  });
+  const visibleRetryCtas = getRetryButtons();
+  const visibleLoading = Boolean(queryVisible(selectors.loadingSignals));
+  const visibleError = Boolean(queryVisible(selectors.errorSignals));
+  const visibleReserved = Boolean(queryVisible(selectors.reservedSignals));
+  const hasExplicitErrorMarker = hasVisibleTextMarker(textMarkers.error);
+
+  return {
+    adapterName: adapter.name,
+    pageText,
+    hasOfferCards: visibleOfferCards.length > 0,
+    hasPriceNodes: visiblePriceNodes.length > 0,
+    hasCheckoutCtas: visibleCheckoutCtas.length > 0,
+    hasRetryCtas: visibleRetryCtas.length > 0,
+    hasVisibleLoading: visibleLoading,
+    hasVisibleError: visibleError,
+    hasVisibleReserved: visibleReserved,
+    hasSearchPrompt: hasVisibleTextMarker(textMarkers.searchPrompt),
+    hasNoAvailabilityMarker: hasVisibleTextMarker(textMarkers.noAvailability),
+    hasResaleMarker: hasVisibleTextMarker(textMarkers.resaleAvailable),
+    hasPurchaseMarker: hasVisibleTextMarker(textMarkers.purchaseReady),
+    hasExplicitErrorMarker
+  };
+}
+
+function classifyAvailability(snapshot) {
+  if (snapshot.hasVisibleReserved) {
+    return "reserved";
+  }
+
+  if ((snapshot.hasResaleMarker || snapshot.hasOfferCards) && (snapshot.hasCheckoutCtas || snapshot.hasPurchaseMarker)) {
+    return "resale_available";
+  }
+
+  if (snapshot.hasVisibleLoading) {
+    return "loading";
+  }
+
+  if (snapshot.hasNoAvailabilityMarker && !snapshot.hasCheckoutCtas && !snapshot.hasPurchaseMarker) {
+    return "no_tickets";
+  }
+
+  if (snapshot.hasSearchPrompt || snapshot.hasRetryCtas) {
+    return "search_prompt";
+  }
+
+  if (snapshot.hasExplicitErrorMarker) {
+    return "error";
+  }
+
+  return "unknown";
 }
 
 function getResultTone(result) {
@@ -271,7 +508,7 @@ function ensureStatusPanel() {
         top: 20px;
         right: 20px;
         z-index: 2147483647;
-        pointer-events: none;
+        pointer-events: auto;
         color: #f8fafc;
         font-family: "Segoe UI", Arial, sans-serif;
       }
@@ -287,6 +524,12 @@ function ensureStatusPanel() {
         box-shadow: 0 18px 40px rgba(15, 23, 42, 0.32);
         backdrop-filter: blur(10px);
         overflow: hidden;
+        cursor: grab;
+        touch-action: none;
+      }
+
+      #tickr-status-panel .tickr-card.tickr-dragging {
+        cursor: grabbing;
       }
 
       #tickr-status-panel .tickr-header,
@@ -541,9 +784,115 @@ function ensureStatusPanel() {
     });
   });
 
+  const card = panel.querySelector(".tickr-card");
+  card.addEventListener("pointerdown", handlePanelPointerDown);
+
   document.documentElement.appendChild(panel);
   statusPanel = panel;
   return panel;
+}
+
+function clampPanelPosition(x, y, panelWidth, panelHeight) {
+  const maxX = Math.max(0, window.innerWidth - panelWidth);
+  const maxY = Math.max(0, window.innerHeight - panelHeight);
+
+  return {
+    x: Math.min(Math.max(0, x), maxX),
+    y: Math.min(Math.max(0, y), maxY)
+  };
+}
+
+function applyStoredPanelPosition() {
+  const panel = ensureStatusPanel();
+  if (panelDragState) return;
+
+  if (!trackerState.panelPosition || window.innerWidth <= 640) {
+    panel.style.left = "";
+    panel.style.top = "";
+    panel.style.right = "";
+    panel.style.bottom = "";
+    return;
+  }
+
+  const card = panel.querySelector(".tickr-card");
+  const rect = card.getBoundingClientRect();
+  const position = clampPanelPosition(
+    trackerState.panelPosition.x,
+    trackerState.panelPosition.y,
+    rect.width || 320,
+    rect.height || 420
+  );
+
+  panel.style.left = `${position.x}px`;
+  panel.style.top = `${position.y}px`;
+  panel.style.right = "auto";
+  panel.style.bottom = "auto";
+}
+
+function persistPanelPosition(x, y) {
+  patchTrackerState({
+    panelPosition: { x, y }
+  });
+}
+
+function handlePanelPointerDown(event) {
+  const panel = ensureStatusPanel();
+  const card = panel.querySelector(".tickr-card");
+
+  if (event.button !== 0) return;
+  if (event.target.closest("button, input, a, select, textarea, label")) return;
+  if (window.innerWidth <= 640) return;
+
+  const rect = panel.getBoundingClientRect();
+  panelDragState = {
+    pointerId: event.pointerId,
+    offsetX: event.clientX - rect.left,
+    offsetY: event.clientY - rect.top
+  };
+
+  card.classList.add("tickr-dragging");
+  card.setPointerCapture(event.pointerId);
+  card.addEventListener("pointermove", handlePanelPointerMove);
+  card.addEventListener("pointerup", handlePanelPointerUp);
+  card.addEventListener("pointercancel", handlePanelPointerUp);
+}
+
+function handlePanelPointerMove(event) {
+  const panel = ensureStatusPanel();
+  const card = panel.querySelector(".tickr-card");
+
+  if (!panelDragState || event.pointerId !== panelDragState.pointerId) return;
+
+  const position = clampPanelPosition(
+    event.clientX - panelDragState.offsetX,
+    event.clientY - panelDragState.offsetY,
+    card.offsetWidth,
+    card.offsetHeight
+  );
+
+  panel.style.left = `${position.x}px`;
+  panel.style.top = `${position.y}px`;
+  panel.style.right = "auto";
+  panel.style.bottom = "auto";
+}
+
+function handlePanelPointerUp(event) {
+  const panel = ensureStatusPanel();
+  const card = panel.querySelector(".tickr-card");
+
+  if (!panelDragState || event.pointerId !== panelDragState.pointerId) return;
+
+  const rect = panel.getBoundingClientRect();
+  const position = clampPanelPosition(rect.left, rect.top, card.offsetWidth, card.offsetHeight);
+
+  card.classList.remove("tickr-dragging");
+  card.releasePointerCapture(event.pointerId);
+  card.removeEventListener("pointermove", handlePanelPointerMove);
+  card.removeEventListener("pointerup", handlePanelPointerUp);
+  card.removeEventListener("pointercancel", handlePanelPointerUp);
+  panelDragState = null;
+
+  persistPanelPosition(position.x, position.y);
 }
 
 function updateStatusPanel() {
@@ -568,6 +917,7 @@ function updateStatusPanel() {
   panel.querySelector(".tickr-signal-text").innerText = trackerState.telegramConfigured
     ? "Telegram armed"
     : "Telegram not configured";
+  applyStoredPanelPosition();
 
   const startBtn = panel.querySelector('[data-action="start"]');
   const pauseBtn = panel.querySelector('[data-action="pause"]');
@@ -659,6 +1009,7 @@ function notify() {
   setTrackerState("Tickets detected. Alert sent.", "found", {
     lastResult: "Tickets found"
   });
+  logEvent("success", "Tickets found", window.location.href);
 
   console.log("Tickets found!");
 
@@ -679,31 +1030,16 @@ function hasPurchaseCTA() {
   });
 }
 
-function detectTickets() {
-  const text = getPageText();
-
-  if (NEGATIVE_AVAILABILITY_PHRASES.some((phrase) => text.includes(phrase))) {
-    return false;
-  }
-
-  const hasPrice = /(?:\u00A3|\$)\s?\d/.test(text);
-
-  return hasPrice && hasPurchaseCTA();
+function hasReserved(snapshot) {
+  return snapshot.hasVisibleReserved || snapshot.pageText.includes("tickets reserved for");
 }
 
-function hasReserved() {
-  const text = getPageText();
-  return text.includes("tickets reserved for");
+function isLoading(snapshot) {
+  return snapshot.hasVisibleLoading || snapshot.pageText.includes("loading") || snapshot.pageText.includes("searching");
 }
 
-function isLoading() {
-  const text = getPageText();
-  return text.includes("loading") || text.includes("searching");
-}
-
-function hasError() {
-  const text = getPageText();
-  return text.includes("something went wrong");
+function hasError(snapshot) {
+  return snapshot.hasExplicitErrorMarker;
 }
 
 function clickFind() {
@@ -768,6 +1104,12 @@ function refreshPageAfterError(errorCount) {
     );
   }
 
+  logEvent(
+    shouldAlert ? "error" : "warning",
+    shouldAlert ? `Error refresh #${errorCount} with Telegram alert` : `Error refresh #${errorCount}`,
+    window.location.href
+  );
+
   window.location.reload();
 }
 
@@ -826,42 +1168,50 @@ function runTracker() {
   isRunning = true;
   patchTrackerState({
     lastCheckAt: Date.now(),
-    nextCheckAt: null
+    nextCheckAt: null,
+    adapterName: resolveAdapter().name
   }, false);
   setTrackerState("Checking page state and ticket actions.", "scanning");
 
   try {
-    if (hasReserved()) {
+    const adapter = resolveAdapter();
+    const snapshot = getAvailabilitySnapshot(adapter);
+    const availabilityState = classifyAvailability(snapshot);
+
+    if (availabilityState === "reserved" || hasReserved(snapshot)) {
       resetErrorState(false);
       setTrackerState("Tickets reserved on page.", "found", {
         lastResult: "Tickets found: reserved on page"
       });
+      logEvent("success", "Reserved state detected", adapter.name);
       notify();
       scheduleNext(12000);
       return;
     }
 
-    if (detectTickets()) {
+    if (availabilityState === "resale_available") {
       resetErrorState(false);
-      setTrackerState("Tickets detected on page.", "found", {
-        lastResult: "Tickets found"
+      setTrackerState("Resale tickets appear ready to purchase.", "found", {
+        lastResult: "Tickets found: resale available"
       });
+      logEvent("success", "Resale availability detected", adapter.name);
       notify();
       scheduleNext(10000);
       return;
     }
 
-    if (isLoading()) {
+    if (availabilityState === "loading" || isLoading(snapshot)) {
       resetErrorState(false);
       recordSearchResult("productive");
       setTrackerState("Ticketmaster is still loading results.", "waiting", {
         lastResult: "Loading search results"
       });
+      logEvent("info", "Loading state observed", adapter.name);
       scheduleNext(randomDelay(5000, 7000));
       return;
     }
 
-    if (hasError()) {
+    if (availabilityState === "error" || hasError(snapshot)) {
       const errorCount = (trackerState.errorCount || 0) + 1;
       recordSearchResult("non-productive");
       refreshPageAfterError(errorCount);
@@ -869,26 +1219,66 @@ function runTracker() {
     }
 
     resetErrorState(false);
+
     const clicked = clickFind() || clickSearchAgain();
+
+    if (availabilityState === "no_tickets") {
+      recordSearchResult(clicked ? "productive" : "non-productive");
+      setTrackerState(
+        clicked
+          ? "No resale tickets visible. Triggered another search."
+          : "No resale tickets are currently visible.",
+        "waiting",
+        {
+          lastResult: clicked ? "No tickets found: search triggered" : "No tickets found"
+        }
+      );
+      logEvent(
+        clicked ? "action" : "info",
+        clicked ? "No resale tickets: search triggered" : "No resale tickets available",
+        adapter.name
+      );
+      scheduleNext(randomDelay(7000, 11000));
+      return;
+    }
+
     recordSearchResult(clicked ? "productive" : "non-productive");
     setTrackerState(
-      clicked ? "Triggered a retry action on the page." : "Watching for availability changes.",
+      clicked
+        ? (availabilityState === "search_prompt"
+            ? "Triggered search prompt action on the page."
+            : "Triggered a retry action on the page.")
+        : "Watching for availability changes.",
       "waiting",
       {
-        lastResult: clicked ? "No tickets found: search triggered" : "No tickets found"
+        lastResult: clicked
+          ? (availabilityState === "search_prompt"
+              ? "Search for tickets triggered"
+              : "No tickets found: search triggered")
+          : "No tickets found"
       }
+    );
+    logEvent(
+      clicked ? "action" : "info",
+      clicked
+        ? (availabilityState === "search_prompt" ? "Search prompt triggered" : "Retry action triggered")
+        : "No tickets found",
+      adapter.name
     );
     scheduleNext(randomDelay(7000, 11000));
   } catch (err) {
     console.log("Loop error:", err);
     const errorCount = (trackerState.errorCount || 0) + 1;
     recordSearchResult("non-productive");
+    logEvent("error", "Unexpected tracker error", String(err));
     refreshPageAfterError(errorCount);
   }
 }
 
 function applyModeChange(action) {
   if (action === "start") {
+    const isResume = trackerState.mode === "paused";
+
     const baseState = trackerState.mode === "paused"
       ? {
           ...trackerState,
@@ -909,19 +1299,26 @@ function applyModeChange(action) {
 
     trackerState = baseState;
 
+    if (!isResume) {
+      clearTrackerLog();
+    }
+
     updateStatusPanel();
     persistTrackerState();
+    logEvent("action", isResume ? "Tracking resumed" : "Tracking started", resolveAdapter().name);
     startRefreshTimer();
     runTracker();
     return;
   }
 
   if (action === "pause") {
+    logEvent("action", "Tracking paused", resolveAdapter().name);
     stopTrackerSession("paused", "Tracking paused from the Tickr controls.");
     return;
   }
 
   if (action === "stop") {
+    logEvent("action", "Tracking stopped", resolveAdapter().name);
     stopTrackerSession("stopped", "Tracking stopped. Start a new session when ready.");
   }
 }
@@ -972,16 +1369,18 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 window.addEventListener("load", () => {
   updateStatusPanel();
 
-  chrome.storage.local.get(["trackerState", "chatId", "token"], (data) => {
+  chrome.storage.local.get(["trackerState", "chatId", "token", "trackerLog"], (data) => {
     telegramConfig = {
       token: data.token || "",
       chatId: data.chatId || ""
     };
+    trackerLog = Array.isArray(data.trackerLog) ? data.trackerLog : [];
 
     trackerState = {
       ...TRACKER_DEFAULTS,
       ...(data.trackerState || {}),
-      telegramConfigured: Boolean(telegramConfig.token && telegramConfig.chatId)
+      telegramConfigured: Boolean(telegramConfig.token && telegramConfig.chatId),
+      adapterName: resolveAdapter().name
     };
 
     updateStatusPanel();
@@ -994,5 +1393,6 @@ window.addEventListener("load", () => {
 });
 
 document.addEventListener("visibilitychange", updateStatusPanel);
+window.addEventListener("resize", applyStoredPanelPosition);
 
 updateStatusPanel();
