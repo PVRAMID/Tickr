@@ -6,11 +6,17 @@
 
   <style>
     body {
-      font-family: Arial;
-      width: 260px;
+      width: 300px;
       padding: 15px;
+      margin: 0;
+      font-family: Arial, sans-serif;
       text-align: center;
       background: #f5f5f5;
+      color: #0f172a;
+    }
+
+    h2 {
+      margin: 0 0 8px;
     }
 
     button {
@@ -23,12 +29,8 @@
       cursor: pointer;
     }
 
-    #startBtn { background: #ddd; }
-    #coffeeBtn { background: #ff813f; color: white; }
-    #saveTelegram { background: black; color: white; }
-    #testTelegram { background: #2a2a2a; color: white;}
-
     input {
+      box-sizing: border-box;
       width: 100%;
       padding: 10px;
       margin-top: 8px;
@@ -36,21 +38,106 @@
       border: 1px solid #ccc;
     }
 
-    .label {
+    #status {
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .statusDetail {
+      margin: 0 0 12px;
       font-size: 12px;
-      margin-top: 10px;
-      text-align: left;
+      color: #475569;
     }
 
     .note {
       margin: 10px 0 14px;
       padding: 10px;
       border-radius: 10px;
-      background: #ffffff;
+      background: white;
       font-size: 12px;
       line-height: 1.4;
       text-align: left;
       border: 1px solid #e2e2e2;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .stat {
+      padding: 10px;
+      border-radius: 10px;
+      background: white;
+      border: 1px solid #e2e8f0;
+      text-align: left;
+    }
+
+    .statLabel {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #64748b;
+    }
+
+    .statValue {
+      font-size: 16px;
+      font-weight: 700;
+      color: #0f172a;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .controls button {
+      margin: 0;
+      padding: 10px 8px;
+      font-size: 13px;
+    }
+
+    #startBtn {
+      background: #111827;
+      color: white;
+    }
+
+    #pauseBtn {
+      background: #f59e0b;
+      color: white;
+    }
+
+    #stopBtn {
+      background: #e5e7eb;
+      color: #111827;
+    }
+
+    #coffeeBtn {
+      background: #ff813f;
+      color: white;
+    }
+
+    #saveTelegram {
+      background: black;
+      color: white;
+    }
+
+    #testTelegram {
+      background: #2a2a2a;
+      color: white;
+    }
+
+    .label {
+      margin-top: 10px;
+      font-size: 12px;
+      text-align: left;
     }
 
     .subnote {
@@ -61,7 +148,6 @@
       color: #444;
     }
 
-    /* ℹ️ Tooltip */
     .info {
       position: relative;
       cursor: pointer;
@@ -87,36 +173,56 @@
     .info:hover .infoText {
       visibility: visible;
     }
-
-    
   </style>
 </head>
 
 <body>
+  <h2>Tickr</h2>
 
-  <h2>🎟️ Tickr</h2>
-
-  <div id="status">🔴 Paused</div>
+  <div id="status">Paused</div>
+  <div id="statusDetail" class="statusDetail">Tracker is idle.</div>
 
   <div class="note">
     When Ticketmaster reserves tickets, the hold usually lasts about 1 minute 30 seconds so you have time to complete checkout.
   </div>
 
-  <button id="startBtn">▶️ Start tracking</button>
+  <div class="stats">
+    <div class="stat">
+      <span class="statLabel">Run time</span>
+      <span id="runtime" class="statValue">00:00</span>
+    </div>
+    <div class="stat">
+      <span class="statLabel">Last check</span>
+      <span id="lastCheck" class="statValue">Waiting</span>
+    </div>
+    <div class="stat">
+      <span class="statLabel">Productive</span>
+      <span id="productiveCount" class="statValue">0</span>
+    </div>
+    <div class="stat">
+      <span class="statLabel">Non-productive</span>
+      <span id="nonProductiveCount" class="statValue">0</span>
+    </div>
+  </div>
 
-  <!-- TELEGRAM -->
+  <div class="controls">
+    <button id="startBtn">Start</button>
+    <button id="pauseBtn">Pause</button>
+    <button id="stopBtn">Stop</button>
+  </div>
+
   <div class="subnote">
     Add your Telegram details below if you want a phone notification when Tickr detects a ticket.
   </div>
 
   <div class="label">
     Telegram Bot Token
-    <span class="info">ℹ️
+    <span class="info">i
       <span class="infoText">
-        1. Open Telegram  
-        2. Search @BotFather  
-        3. Type /start → /newbot  
-        4. Copy your token  
+        1. Open Telegram
+        2. Search @BotFather
+        3. Type /start then /newbot
+        4. Copy your token
       </span>
     </span>
   </div>
@@ -124,21 +230,19 @@
 
   <div class="label">
     Chat ID
-    <span class="info">ℹ️
+    <span class="info">i
       <span class="infoText">
-        1. Search @userinfobot  
-        2. Click Start  
-        3. Copy your ID  
+        1. Search @userinfobot
+        2. Click Start
+        3. Copy your ID
       </span>
     </span>
   </div>
   <input id="chatId" placeholder="Chat ID" />
 
   <button id="saveTelegram">Save Telegram</button>
-
   <button id="testTelegram">Test Telegram</button>
-
-  <button id="coffeeBtn">☕ Buy me a coffee</button>
+  <button id="coffeeBtn">Buy me a coffee</button>
 
   <script src="popup.js"></script>
 </body>
